@@ -1,28 +1,14 @@
-"""
-Functions to edit:
-    1. build_mlp (line 26)
-"""
+# hw1 implementation summary
 
-from typing import Union
-import copy
+코드를 중심으로 정리하고, 의미는 짧은 주석으로만 남깁니다.
 
-import torch
-from torch import nn
+---
 
-Activation = Union[str, nn.Module]
+## 1) build_mlp
 
+위치: [hw1/cas4160/infrastructure/pytorch_util.py](hw1/cas4160/infrastructure/pytorch_util.py)
 
-_str_to_activation = {
-    "relu": nn.ReLU(),
-    "tanh": nn.Tanh(),
-    "leaky_relu": nn.LeakyReLU(),
-    "sigmoid": nn.Sigmoid(),
-    "selu": nn.SELU(),
-    "softplus": nn.Softplus(),
-    "identity": nn.Identity(),
-}
-
-
+```python
 def build_mlp(
     input_size: int,
     output_size: int,
@@ -46,6 +32,7 @@ def build_mlp(
     returns:
         MLP (nn.Module)
     """
+    # 문자열로 들어온 활성화 함수를 실제 모듈로 바꾼다.
     if isinstance(activation, str):
         activation = _str_to_activation[activation]
     if isinstance(output_activation, str):
@@ -58,39 +45,22 @@ def build_mlp(
     # HINT 2: We are only using linear layers and activation layers.
     # HINT 3: You can simple create a list, append nn layers, and convert with nn.Sequential.
     layers = []
-    in_dim = input_size
+    in_dim = input_size  # 현재 레이어의 입력 차원
 
+    # hidden layer를 n_layers 개수만큼 쌓는다.
     for _ in range(n_layers):
         layers.append(nn.Linear(in_dim, size))
         layers.append(copy.deepcopy(activation))
         in_dim = size
 
+    # 마지막 출력층과 출력 활성화 함수를 추가한다.
     layers.append(nn.Linear(in_dim, output_size))
     layers.append(copy.deepcopy(output_activation))
 
+    # 순서대로 연결된 MLP를 반환한다.
     return nn.Sequential(*layers)
+```
 
-
-device = None
-
-
-def init_gpu(use_gpu=True, gpu_id=0):
-    global device
-    if torch.cuda.is_available() and use_gpu:
-        device = torch.device("cuda:" + str(gpu_id))
-        print("Using GPU id {}".format(gpu_id))
-    else:
-        device = torch.device("cpu")
-        print("GPU not detected. Defaulting to CPU.")
-
-
-def set_device(gpu_id):
-    torch.cuda.set_device(gpu_id)
-
-
-def from_numpy(*args, **kwargs):
-    return torch.from_numpy(*args, **kwargs).float().to(device)
-
-
-def to_numpy(tensor):
-    return tensor.to("cpu").detach().numpy()
+메모
+- `n_layers=0`이면 hidden layer 없이 `Linear(input_size, output_size)` + `output_activation`만 생성됨.
+- `copy.deepcopy`는 activation 모듈을 레이어마다 독립적으로 쓰기 위해 사용.
