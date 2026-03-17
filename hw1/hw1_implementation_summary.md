@@ -471,3 +471,77 @@ obs[7] ↔ ac[7] ↔ rew[7] ↔ next_obs[7] ↔ terminal[7]   ✓ 같은 transit
 | 대상 | 전체 버퍼 | 최근 데이터만 |
 | 방법 | 무작위 인덱스 | `[-batch_size:]` 슬라이싱 |
 | 사용 시점 | 일반 BC 학습 스텝 | DAgger에서 최근 수집 데이터 우선 활용 |
+
+---
+
+## 9) BCAgent
+
+위치: [hw1/cas4160/agents/bc_agent.py](hw1/cas4160/agents/bc_agent.py)
+
+```python
+class BCAgent(BaseAgent):
+    def __init__(self, env, agent_params):
+        super(BCAgent, self).__init__()
+        self.env = env
+        self.agent_params = agent_params
+
+        # actor/policy
+        self.actor = MLPPolicySL(
+            self.agent_params["ac_dim"],
+            self.agent_params["ob_dim"],
+            self.agent_params["n_layers"],
+            self.agent_params["size"],
+            discrete=self.agent_params["discrete"],
+            learning_rate=self.agent_params["learning_rate"],
+        )
+
+        # replay buffer
+        self.replay_buffer = ReplayBuffer(self.agent_params["max_replay_buffer_size"])
+
+    def train(self, ob_no, ac_na):
+        # training a BC agent refers to updating its actor using
+        # the given observations and corresponding action labels
+        log = self.actor.update(ob_no, ac_na)  # HW1: you will modify actor.update
+        return log
+
+    def add_to_replay_buffer(self, trajs):
+        self.replay_buffer.add_rollouts(trajs)
+
+    def sample(self, batch_size):
+        # HW1: you will modify this
+        return self.replay_buffer.sample_random_data(batch_size)
+```
+
+### 역할
+
+`BCAgent`는 **정책(MLPPolicySL)과 ReplayBuffer를 하나로 묶은 컨테이너**다.
+`bc_trainer`는 BCAgent의 3개 메서드만 호출하고, 내부 구현(MLP, 버퍼)은 직접 접근하지 않는다.
+
+```
+bc_trainer
+    │
+    └── BCAgent
+          ├── actor (MLPPolicySL)    ← 정책 신경망
+          └── replay_buffer          ← 데이터 창고
+```
+
+### 3개 메서드 요약
+
+| 메서드 | 하는 일 | 내부 호출 |
+|---|---|---|
+| `train(ob, ac)` | 정책을 1 스텝 업데이트 | `actor.update()` |
+| `add_to_replay_buffer(trajs)` | rollout 데이터를 버퍼에 저장 | `replay_buffer.add_rollouts()` |
+| `sample(batch_size)` | 버퍼에서 학습용 배치 샘플링 | `replay_buffer.sample_random_data()` |
+
+### 왜 필요한가?
+
+`bc_trainer`의 학습 루프를 깔끔하게 만들기 위한 **인터페이스 계층**이다.
+
+```python
+# bc_trainer 입장에서 학습 1 스텝:
+obs, acs, _, _, _ = agent.sample(batch_size)   # 버퍼에서 꺼내고
+log = agent.train(obs, acs)                    # 업데이트한다
+```
+
+trainer가 MLPPolicySL이나 ReplayBuffer의 내부 구조를 몰라도 동작한다.
+나중에 정책이나 버퍼 구현을 바꿔도 trainer 코드는 수정할 필요 없다.
