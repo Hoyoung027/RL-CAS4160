@@ -125,7 +125,10 @@ class MLPPolicySL(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
         # HINT 2: We would use self.forward function to get the distribution,
         # And we will sample actions from the distribution.
         # HINT 3: Return a numpy action, not torch tensor
-        raise NotImplementedError
+        observation = ptu.from_numpy(observation)
+        distribution = self.forward(observation)
+        action = distribution.sample()
+        return ptu.to_numpy(action)
 
     def forward(self, observation: torch.FloatTensor) -> Any:
         """
@@ -144,7 +147,9 @@ class MLPPolicySL(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
         # And design the function to return such a distribution object.
         # HINT 2: In self.get_action and self.update, we will sample from this distribution.
         # HINT 3: Think about how to convert logstd to regular std.
-        raise NotImplementedError
+        mean = self.mean_net(observation)
+        std = torch.exp(self.logstd)
+        return distributions.Normal(mean, std)
 
     def update(self, observations, actions):
         """
@@ -159,7 +164,13 @@ class MLPPolicySL(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
         # HINT 1: DO NOT forget to call zero_grad to clear gradients from the previous update.
         # HINT 2: DO NOT forget to change the type of observations and actions, just like get_action.
         # HINT 3: DO NOT forget to step the optimizer.
-        loss = None
+        self.optimizer.zero_grad()
+        observations = ptu.from_numpy(observations)
+        actions = ptu.from_numpy(actions)
+        distribution = self.forward(observations)
+        loss = -distribution.log_prob(actions).mean()
+        loss.backward()
+        self.optimizer.step()
         return {
             # You can add extra logging information here, but keep this line
             "Training Loss": ptu.to_numpy(loss),
