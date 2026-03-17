@@ -129,7 +129,14 @@ class ReplayBuffer:
         ## You would use same indices for all arrays.
         ## HINT 3: look at the sample_recent_data function below
 
-        return None, None, None, None, None
+        indices = np.random.choice(self.obs.shape[0], batch_size, replace=False)
+        return (
+            self.obs[indices],
+            self.acs[indices],
+            self.rews[indices],
+            self.next_obs[indices],
+            self.terminals[indices],
+        )
 
     def sample_recent_data(self, batch_size=1):
         """

@@ -1,6 +1,35 @@
 # hw1 implementation summary
 
-코드를 중심으로 정리하고, 의미는 짧은 주석으로만 남깁니다.
+## 목표
+
+전문가(사람 또는 기존 제어기)의 행동 데이터를 모방해, 같은 상황에서 같은 행동을 하는 정책을 지도학습으로 학습한다.
+
+## 전체 흐름
+
+```
+[사전 준비] 전문가가 환경을 직접 조작한 데이터를 파일로 저장
+  expert_data.pkl  →  (obs, action) 쌍 수천 개
+
+[BC: Behavioral Cloning]  n_iter = 1
+  1. 전문가 데이터 로드 → ReplayBuffer에 저장
+  2. num_agent_train_steps_per_iter 번 반복:
+       버퍼에서 배치 샘플링
+       → forward()로 정책 분포 N(μ, σ) 생성
+       → loss = -log P(전문가 행동 | 관측)  (NLL)
+       → backward() + step()  →  파라미터 업데이트
+  3. 학습된 정책으로 환경 실행 → 성능 평가 (로깅)
+
+[DAgger]  n_iter > 1  (BC의 반복적 개선 버전)
+  iter 1: 위 BC와 동일
+  iter 2~:
+       학습된 정책으로 환경 실행 → 새 rollout 수집
+       → 전문가가 그 상황에서 했을 행동으로 레이블링
+       → 버퍼에 추가 (기존 + 새 데이터)
+       → 합쳐진 데이터로 재학습
+```
+
+**BC의 문제점**: 학습 데이터에 없는 상황(distribution shift)이 오면 정책이 무너진다.
+**DAgger의 해결**: 정책이 실제로 방문한 상황을 데이터에 추가해 반복 보완한다.
 
 ---
 
@@ -365,3 +394,80 @@ trajs   # list of traj dict, 길이 = ntraj
 trajs = [traj1, traj2]   # 정확히 2개 에피소드
 ```
 
+---
+
+## 8) ReplayBuffer.sample_random_data
+
+위치: [hw1/cas4160/infrastructure/replay_buffer.py](hw1/cas4160/infrastructure/replay_buffer.py)
+
+```python
+def sample_random_data(self, batch_size):
+    assert (
+        self.obs.shape[0]
+        == self.acs.shape[0]
+        == self.rews.shape[0]
+        == self.next_obs.shape[0]
+        == self.terminals.shape[0]
+    )
+
+    ## TODO return batch_size number of random entries
+    ## from each of the 5 component arrays above.
+    ## HINT 1: use np.random.choice to sample random indices.
+    ## Remember not to "replace" when sampling data
+    ## HINT 2: return corresponding data points from each array
+    ## (i.e., not different indices from each array)
+    ## You would use same indices for all arrays.
+    ## HINT 3: look at the sample_recent_data function below
+
+    indices = np.random.choice(self.obs.shape[0], batch_size, replace=False)
+    return (
+        self.obs[indices],
+        self.acs[indices],
+        self.rews[indices],
+        self.next_obs[indices],
+        self.terminals[indices],
+    )
+```
+
+### 목적
+
+ReplayBuffer에 쌓인 전체 transition 데이터 중 `batch_size`개를 **무작위**로 뽑아 학습에 사용한다.
+
+### Replay Buffer가 왜 필요한가?
+
+BC에서 한 번 수집한 rollout 데이터를 버퍼에 저장해두고 **반복해서 재사용**한다.
+매 학습 스텝마다 환경을 새로 돌리지 않아도 되므로 효율적이다.
+
+```
+rollout → 데이터 수집 → ReplayBuffer에 저장
+                          ↓
+          매 학습 스텝마다 배치 샘플링 → 정책 업데이트
+```
+
+### 왜 random 샘플링인가?
+
+연속된 스텝 데이터는 시간적으로 상관관계가 높다.
+같은 순서로 계속 학습하면 신경망이 특정 패턴에 편향될 수 있으므로,
+무작위 샘플링으로 시간적 상관관계를 깨서 더 안정적인 학습을 유도한다.
+
+- `replace=False`: 같은 배치 안에서 동일 데이터가 중복되지 않도록 한다.
+
+### 왜 같은 indices를 5개 배열에 모두 쓰는가?
+
+`(obs, ac, rew, next_obs, terminal)`은 같은 time step의 데이터 쌍이다.
+인덱스가 다르면 서로 관련 없는 obs와 action이 매칭되어 의미없는 학습이 된다.
+
+```
+indices = [3, 7, 1]
+
+obs[3] ↔ ac[3] ↔ rew[3] ↔ next_obs[3] ↔ terminal[3]   ✓ 같은 transition
+obs[7] ↔ ac[7] ↔ rew[7] ↔ next_obs[7] ↔ terminal[7]   ✓ 같은 transition
+```
+
+### sample_recent_data와 비교
+
+| | `sample_random_data` | `sample_recent_data` |
+|---|---|---|
+| 대상 | 전체 버퍼 | 최근 데이터만 |
+| 방법 | 무작위 인덱스 | `[-batch_size:]` 슬라이싱 |
+| 사용 시점 | 일반 BC 학습 스텝 | DAgger에서 최근 수집 데이터 우선 활용 |
