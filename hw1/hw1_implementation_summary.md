@@ -545,3 +545,103 @@ log = agent.train(obs, acs)                    # 업데이트한다
 
 trainer가 MLPPolicySL이나 ReplayBuffer의 내부 구조를 몰라도 동작한다.
 나중에 정책이나 버퍼 구현을 바꿔도 trainer 코드는 수정할 필요 없다.
+
+---
+
+## 10) BCTrainer.collect_training_trajectories & train_agent
+
+위치: [hw1/cas4160/infrastructure/bc_trainer.py](hw1/cas4160/infrastructure/bc_trainer.py)
+
+```python
+def collect_training_trajectories(self, itr, collect_policy, load_initial_expertdata=None):
+    # TODO decide whether to load training data or use the current policy to collect more data
+    # HINT1: depending on if it's the first iteration or not, decide whether to either
+    # (1) If it is the first iteration and training data exists, load it using pickle.load.
+    # In this case, you can directly return as follows
+    # ``` return loaded_trajs, 0, None ```
+    # (2) If no training data exists,
+    # collect `self.params['batch_size_initial']` transitions
+    # (3) If it is not the first iteration (the case of DAgger implementation),
+    # collect `self.params['batch_size']` transitions
+    # HINT2: use rollout_trajectories from utils
+    # HINT3: you want each of these collected rollouts to be of length self.params['ep_len']
+
+    print("\nCollecting data to be used for training...")
+
+    if itr == 0 and load_initial_expertdata is not None:
+        with open(load_initial_expertdata, "rb") as f:
+            loaded_trajs = pickle.load(f)
+        return loaded_trajs, 0, None  # 전문가 데이터 바로 반환
+
+    trajs, envsteps_this_batch = utils.rollout_trajectories(
+        self.env, collect_policy, self.params["batch_size"], self.params["ep_len"]
+    )
+
+    train_video_trajs = None
+    if self.log_video:
+        print("\nCollecting train rollouts to be used for saving videos...")
+        train_video_trajs = utils.rollout_n_trajectories(
+            self.env, collect_policy, MAX_NVIDEO, MAX_VIDEO_LEN, True
+        )
+
+    return trajs, envsteps_this_batch, train_video_trajs
+
+
+def train_agent(self):
+    print("\nTraining agent using sampled data from replay buffer...")
+    all_logs = []
+    for train_step in range(self.params["num_agent_train_steps_per_iter"]):
+        # TODO sample some data from the data buffer
+        # HINT1: use the agent's sample function
+        # HINT2: how much data = self.params['train_batch_size']
+        ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch = (
+            self.agent.sample(self.params["train_batch_size"])  # 버퍼에서 배치 샘플링
+        )
+
+        # TODO use the sampled data to train an agent
+        # HINT3: use the agent's train function
+        # HINT4: keep the agent's training log for debugging
+        train_log = self.agent.train(ob_batch, ac_batch)  # 정책 1 스텝 업데이트
+        all_logs.append(train_log)
+    return all_logs
+```
+
+### collect_training_trajectories 목적
+
+매 iteration마다 학습에 사용할 trajectory 데이터를 준비한다.
+
+```
+itr == 0 AND 전문가 파일 있음
+    → pickle.load()로 전문가 데이터 로드 → 바로 반환 (환경 실행 없음)
+
+itr == 0 AND 파일 없음  /  itr > 0 (DAgger)
+    → rollout_trajectories()로 현재 정책 실행해서 직접 수집
+
+self.log_video == True
+    → rollout_n_trajectories()로 영상 저장용 MAX_NVIDEO개 추가 수집
+```
+
+BC(`n_iter=1`)에서는 항상 첫 번째 경로 — 전문가 데이터를 파일에서 바로 로드한다.
+
+### train_agent 목적
+
+버퍼에 쌓인 데이터로 정책을 `num_agent_train_steps_per_iter`번 업데이트한다.
+
+```
+1000번 반복:
+    버퍼에서 train_batch_size(=100)개 랜덤 샘플링
+    → agent.train(ob, ac)  →  NLL loss 계산 → 역전파 → 파라미터 업데이트
+```
+
+`re_batch`, `next_ob_batch`, `terminal_batch`는 BC에서는 사용하지 않는다.
+BC는 (관측, 행동) 쌍만으로 지도학습을 수행하기 때문이다.
+
+### 전체 학습 루프에서의 위치
+
+```
+run_training_loop()
+    │
+    ├── collect_training_trajectories()  ← 데이터 준비
+    ├── agent.add_to_replay_buffer()     ← 버퍼에 저장
+    └── train_agent()                    ← 1000번 업데이트
+```
