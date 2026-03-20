@@ -128,7 +128,7 @@ class MLPPolicySL(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
         observation = ptu.from_numpy(observation)
         distribution = self.forward(observation)
         action = distribution.sample()
-        return ptu.to_numpy(action)
+        return ptu.to_numpy(action).squeeze()
 
     def forward(self, observation: torch.FloatTensor) -> Any:
         """
