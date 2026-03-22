@@ -266,6 +266,9 @@ class BCTrainer:
         # HINT: query the policy (using the get_action function) with trajs[i]["observation"]
         # and replace trajs[i]["action"] with these expert labels
 
+        for traj in trajs:
+            traj["action"] = expert_policy.get_action(traj["observation"])
+
         return trajs
 
     ####################################

@@ -48,6 +48,8 @@ python cas4160/scripts/run_hw1.py \
     --eval_batch_size 10000
 ```
 
+> `--eval_batch_size 10000`: ep_len(1000) 기준 약 10개 rollout 평균 → 신뢰도 있는 `Eval_AverageReturn` 확보. BC와 동일한 이유로 DAgger에도 필수.
+
 ---
 
 ## 목표
@@ -696,6 +698,85 @@ run_training_loop()
     ├── agent.add_to_replay_buffer()     ← 버퍼에 저장
     └── train_agent()                    ← 1000번 업데이트
 ```
+
+---
+
+## 11) BCTrainer.do_relabel_with_expert (DAgger)
+
+위치: [hw1/cas4160/infrastructure/bc_trainer.py](hw1/cas4160/infrastructure/bc_trainer.py)
+
+```python
+def do_relabel_with_expert(self, expert_policy, trajs):
+    """
+    Relabels collected trajectories with an expert policy
+
+    :param expert_policy: the policy we want to relabel the trajs with
+    :param trajs: trajs to relabel
+    """
+    print(
+        "\nRelabelling collected observations with labels from an expert policy..."
+    )
+
+    # TODO relabel collected obsevations (from our policy) with labels from an expert policy
+    # HINT: query the policy (using the get_action function) with trajs[i]["observation"]
+    # and replace trajs[i]["action"] with these expert labels
+
+    for traj in trajs:
+        traj["action"] = expert_policy.get_action(traj["observation"])
+
+    return trajs
+```
+
+### 목적
+
+BC의 핵심 문제인 **covariate shift(분포 이동)**를 해결하기 위한 DAgger의 핵심 단계.
+
+BC는 전문가가 방문한 상태(state)에서만 학습하지만, 실제 실행 중에는 정책 실수로 전문가가 한 번도 가지 않은 상태에 진입할 수 있다. 이 함수는 우리 정책이 실제로 방문한 상태들에 대해 전문가가 했을 행동으로 다시 라벨링해 버퍼에 추가함으로써 그 간극을 메운다.
+
+### 구현 원리
+
+```
+우리 정책이 실행한 trajectory
+    obs:    [s1,  s2,  s3,  ..., sT]   ← 우리 정책이 실제 방문한 state
+    action: [a1,  a2,  a3,  ..., aT]   ← 우리 정책이 선택한 action (덮어씀)
+
+expert_policy.get_action(obs) 호출
+    → 전문가가 [s1, s2, s3, ..., sT] 에서 했을 action 계산
+
+traj["action"] 교체
+    action: [a1*, a2*, a3*, ..., aT*]  ← 전문가 라벨로 교체됨
+```
+
+결과적으로 **"우리 policy의 state distribution + 전문가의 action label"** 쌍이 만들어져, 정책이 실제 방문하는 상태에서 올바른 행동을 학습할 수 있다.
+
+### DAgger 전체 흐름에서의 위치
+
+```
+run_training_loop() (n_iter > 1, --do_dagger)
+    │
+    ├── iter 1: 전문가 데이터 로드 → BC와 동일하게 학습
+    │
+    └── iter 2~n:
+          1. collect_training_trajectories()  ← 현재 정책으로 rollout 수집
+          2. do_relabel_with_expert()         ← ★ 이 함수: action을 전문가 라벨로 교체
+          3. agent.add_to_replay_buffer()     ← 기존 데이터 + 새 데이터 합산
+          4. train_agent()                    ← 합쳐진 데이터로 재학습
+          5. 평가 및 로깅
+```
+
+### BC와의 차이
+
+| | BC | DAgger |
+|---|---|---|
+| 학습 데이터 source | 전문가가 사전 수집한 pkl 파일만 | 매 iter 우리 정책이 수집한 rollout |
+| action 라벨 | 전문가의 원래 action | 전문가가 **우리 정책의 state**에서 했을 action |
+| 데이터 누적 | 고정 | 매 iter 버퍼에 추가 (증가) |
+| covariate shift | 해결 못함 | 해결 |
+
+### get_action이 배열 전체를 받을 수 있는 이유
+
+`traj["observation"]`은 shape `(T, ob_dim)`인 2D 배열이다.
+`get_action` 내부에서 `len(obs.shape) > 1`이면 배치 차원을 추가하지 않고 그대로 처리하므로, observation 배열 전체를 한 번에 넘겨 T개의 expert action을 한 번에 얻을 수 있다.
 
 ---
 
