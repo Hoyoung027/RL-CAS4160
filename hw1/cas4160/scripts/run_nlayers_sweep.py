@@ -101,16 +101,21 @@ def plot_results(results: dict):
     color = "#2E8B57"  # sea green
 
     fig, ax = plt.subplots(figsize=(11, 6))
-    ax.plot(n_vals, means, marker="o", linewidth=2, markersize=8, color=color, label="BC policy")
+    ax.errorbar(
+        n_vals, means, yerr=stds,
+        marker="o", linewidth=2, markersize=8,
+        color=color, ecolor="dimgray", elinewidth=1.5,
+        capsize=5, capthick=1.5,
+        label="BC policy",
+    )
 
-    # std를 각 점 옆에 텍스트로 표시
     for x, mean, std in zip(n_vals, means, stds):
         ax.annotate(
-            f"±{std:.1f}",
+            f"{mean:.1f}±{std:.1f}",
             xy=(x, mean),
-            xytext=(6, 4),
+            xytext=(6, 6),
             textcoords="offset points",
-            fontsize=11,
+            fontsize=6,
             color="dimgray",
         )
 
