@@ -463,3 +463,263 @@ ratio = exp(log π_θ - log π_old)
 | std | 없음 | 학습 가능한 `logstd` 파라미터 |
 
 ---
+
+## 4. `cas4160/agents/pg_agent.py` — 핵심 학습 로직
+
+### 역할
+
+Policy Gradient의 전체 학습 루프를 담당한다. 수집된 trajectory 데이터로부터 Q값을 계산하고, advantage를 추정하고, actor와 critic을 업데이트하는 모든 과정이 여기에 있다.
+
+---
+
+### 구현 코드
+
+```python
+def update(self, obs, actions, rewards, terminals) -> dict:
+    # step 1: Q값 계산 (이미 제공됨)
+    q_values = self._calculate_q_vals(rewards)
+
+    # TODO: flatten
+    obs = np.concatenate(obs)
+    actions = np.concatenate(actions)
+    rewards = np.concatenate(rewards)
+    terminals = np.concatenate(terminals)
+    q_values = np.concatenate(q_values)
+
+    # step 2: advantage 추정
+    advantages = self._estimate_advantage(obs, rewards, q_values, terminals)
+
+    if not self.use_ppo:
+        # TODO: normalize
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # TODO: actor 업데이트
+        info = self.actor.update(obs, actions, advantages)
+
+        if self.critic is not None:
+            # TODO: critic 업데이트
+            for _ in range(self.baseline_gradient_steps):
+                critic_info = self.critic.update(obs, q_values)
+            info.update(critic_info)
+    else:
+        logp = self._calculate_log_probs(obs, actions)
+        n_batch = len(obs)
+        inds = np.arange(n_batch)
+        for _ in range(self.n_ppo_epochs):
+            np.random.shuffle(inds)
+            minibatch_size = (n_batch + (self.n_ppo_minibatches - 1)) // self.n_ppo_minibatches
+            for start in range(0, n_batch, minibatch_size):
+                end = start + minibatch_size
+                obs_slice, actions_slice, advantages_slice, logp_slice = (
+                    arr[inds[start:end]] for arr in (obs, actions, advantages, logp)
+                )
+                # TODO: normalize slice
+                if self.normalize_advantages:
+                    advantages_slice = (advantages_slice - advantages_slice.mean()) / (advantages_slice.std() + 1e-8)
+
+                # TODO: PPO 업데이트
+                info = self.actor.ppo_update(obs_slice, actions_slice, advantages_slice, logp_slice, self.ppo_cliprange)
+
+        for _ in range(self.baseline_gradient_steps):
+            critic_info = self.critic.update(obs, q_values)
+        info.update(critic_info)
+
+    return info
+
+
+def _calculate_q_vals(self, rewards):
+    if not self.use_reward_to_go:
+        # TODO: Q(s_t, a_t) = sum_{t'=0}^T gamma^t' r_{t'}  (전체 궤적, 모든 t 동일)
+        q_values = [self._discounted_return(r) for r in rewards]
+    else:
+        # TODO: Q(s_t, a_t) = sum_{t'=t}^T gamma^(t'-t) r_{t'}  (t 이후만)
+        q_values = [self._discounted_reward_to_go(r) for r in rewards]
+    return q_values
+
+
+def _estimate_advantage(self, obs, rewards, q_values, terminals):
+    if self.critic is None:
+        # TODO: baseline 없으면 advantage = Q값 그대로
+        advantages = q_values
+    else:
+        # TODO: critic으로 V(s) 계산
+        values = ptu.to_numpy(self.critic(ptu.from_numpy(obs)))
+
+        if self.gae_lambda is None:
+            # TODO: A = Q - V
+            advantages = q_values - values
+        else:
+            # TODO: GAE
+            batch_size = obs.shape[0]
+            values = np.append(values, [0])       # 더미 V(s_{T+1}) = 0
+            advantages = np.zeros(batch_size + 1)
+
+            for i in reversed(range(batch_size)):
+                delta = rewards[i] + self.gamma * (1 - terminals[i]) * values[i + 1] - values[i]
+                advantages[i] = delta + self.gamma * self.gae_lambda * (1 - terminals[i]) * advantages[i + 1]
+
+            advantages = advantages[:-1]  # 더미 제거
+    return advantages
+
+
+def _discounted_return(self, rewards):
+    # TODO: 전체 합산, 모든 t에 동일한 값 반환
+    T = len(rewards)
+    gammas = np.array([self.gamma ** t for t in range(T)])
+    total = np.sum(gammas * rewards)
+    ret = np.full(T, total, dtype=np.float32)
+    return ret
+
+
+def _discounted_reward_to_go(self, rewards):
+    # TODO: t 시점부터 역방향으로 누적 합산
+    T = len(rewards)
+    ret = np.zeros(T, dtype=np.float32)
+    running = 0.0
+    for t in reversed(range(T)):
+        running = rewards[t] + self.gamma * running
+        ret[t] = running
+    return ret
+
+
+def _calculate_log_probs(self, obs, actions):
+    # TODO: 현재 policy로 log π(a|s) 계산
+    with torch.no_grad():
+        obs_tensor = ptu.from_numpy(obs)
+        actions_tensor = ptu.from_numpy(actions)
+        dist = self.actor(obs_tensor)
+        logp = dist.log_prob(actions_tensor)
+        if not self.actor.discrete:
+            logp = logp.sum(axis=-1)
+        logp = ptu.to_numpy(logp)
+    return logp
+```
+
+---
+
+### 각 TODO 설명
+
+#### `update` — flatten
+
+```python
+obs = np.concatenate(obs)
+actions = np.concatenate(actions)
+rewards = np.concatenate(rewards)
+terminals = np.concatenate(terminals)
+q_values = np.concatenate(q_values)
+```
+
+입력으로 들어오는 `obs`, `actions` 등은 trajectory별 배열의 리스트다. 예를 들어 3개의 trajectory가 있고 각 길이가 100이면, `obs`는 `[array(100,4), array(100,4), array(100,4)]`이다. `np.concatenate`로 `(300, 4)` 하나로 합쳐야 이후 연산을 배치로 처리할 수 있다.
+
+#### `_discounted_return` — 전체 궤적 할인 보상
+
+```python
+gammas = np.array([self.gamma ** t for t in range(T)])
+total = np.sum(gammas * rewards)
+ret = np.full(T, total, dtype=np.float32)
+```
+
+수식: `Q(s_t, a_t) = Σ_{t'=0}^T γ^{t'} r_{t'}`
+
+모든 timestep에서 동일한 값을 사용한다 (causality를 무시한 naive PG). `np.full`로 같은 값을 T개 채운다.
+
+#### `_discounted_reward_to_go` — t 이후 할인 보상
+
+```python
+running = 0.0
+for t in reversed(range(T)):
+    running = rewards[t] + self.gamma * running
+    ret[t] = running
+```
+
+수식: `Q(s_t, a_t) = Σ_{t'=t}^T γ^{t'-t} r_{t'}`
+
+뒤에서부터 순서대로 누적하면 효율적으로 계산할 수 있다. `t=T`부터 시작해서 `running = r_T`, `running = r_{T-1} + γ*r_T`, ... 식으로 역방향 재귀를 돌린다. O(T)로 계산된다.
+
+#### `_estimate_advantage` — advantage 추정 3가지 경우
+
+**Case 1 — baseline 없음:**
+```python
+advantages = q_values
+```
+강의에서 baseline이 없으면 reward-to-go 자체가 advantage의 역할을 한다.
+
+**Case 2 — baseline 있음, GAE 없음:**
+```python
+values = ptu.to_numpy(self.critic(ptu.from_numpy(obs)))
+advantages = q_values - values
+```
+`A(s,a) = Q(s,a) - V(s)`. V(s)를 critic으로 추정해 Q에서 빼준다. 이렇게 하면 "평균보다 얼마나 나은가"를 측정하게 되어 분산이 줄어든다.
+
+**Case 3 — GAE:**
+```python
+delta = rewards[i] + self.gamma * (1 - terminals[i]) * values[i + 1] - values[i]
+advantages[i] = delta + self.gamma * self.gae_lambda * (1 - terminals[i]) * advantages[i + 1]
+```
+
+강의의 GAE 수식:
+```
+δ_t = r_t + γ·V(s_{t+1}) - V(s_t)          ← TD error
+A_t = δ_t + (γλ)·A_{t+1}                    ← 역방향 재귀
+```
+
+`(1 - terminals[i])` 마스크가 핵심이다. 에피소드가 끝난 시점(`terminal=1`)에서는 `V(s_{t+1})`과 `A_{t+1}`을 모두 0으로 처리한다. 다음 state가 다른 에피소드에 속하기 때문에 현재 advantage 계산에 포함시키면 안 된다.
+
+`values`에 더미값 0을 append하는 이유는 마지막 timestep(`i = batch_size - 1`)에서 `values[i+1]`을 참조할 때 index out of range를 막기 위해서다.
+
+#### `update` — normalize advantages
+
+```python
+advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+```
+
+Advantage를 정규화하면 학습이 안정적이 된다. 배치 내에서 평균 0, 표준편차 1로 만들어 gradient의 scale을 일정하게 유지한다. `1e-8`은 std가 0일 때 division by zero를 방지하는 수치 안정성 항이다.
+
+PPO에서는 전체 배치가 아닌 **미니배치 단위**로 정규화한다는 점이 다르다. 미니배치 내의 통계로 정규화해야 미니배치 업데이트 간 scale이 일관되게 유지된다.
+
+#### `update` — critic 업데이트 반복
+
+```python
+for _ in range(self.baseline_gradient_steps):
+    critic_info = self.critic.update(obs, q_values)
+```
+
+Critic은 actor보다 더 많은 업데이트 스텝이 필요하다. Actor가 1번 업데이트될 때 critic은 `baseline_gradient_steps`번 업데이트된다. Critic이 정확해야 advantage 추정이 정확해지고, 그래야 actor가 올바른 방향으로 업데이트되기 때문이다.
+
+#### PPO — 미니배치 업데이트 구조
+
+```python
+for _ in range(self.n_ppo_epochs):
+    np.random.shuffle(inds)
+    for start in range(0, n_batch, minibatch_size):
+        ...
+        info = self.actor.ppo_update(obs_slice, actions_slice, advantages_slice, logp_slice, self.ppo_cliprange)
+```
+
+PPO가 vanilla PG와 다른 핵심 부분이다. 같은 데이터로 `n_ppo_epochs`번 반복 학습한다. Importance sampling ratio가 policy 변화를 보정하고, clip이 과도한 변화를 막아주기 때문에 가능하다. 매 epoch마다 인덱스를 shuffle해서 미니배치 순서를 무작위로 만든다.
+
+---
+
+### 전체 학습 흐름 요약
+
+```
+trajectory 데이터 (lists of arrays)
+   ↓
+_calculate_q_vals()  →  Q값 계산 (RTG 여부에 따라)
+   ↓
+np.concatenate()     →  flatten (list → single array)
+   ↓
+_estimate_advantage()
+   ├─ critic 없음: A = Q
+   ├─ critic, no GAE: A = Q - V
+   └─ GAE: A = Σ (γλ)^n δ_{t+n}  (역방향 재귀)
+   ↓
+normalize (선택)
+   ↓
+actor.update() or actor.ppo_update()  →  policy 업데이트
+   ↓
+critic.update() × baseline_gradient_steps  →  value function 업데이트
+```
+
+---

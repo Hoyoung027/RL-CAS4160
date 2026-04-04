@@ -81,24 +81,30 @@ class PGAgent(nn.Module):
         # way. obs, actions, rewards, terminals, and q_values should all be arrays with a leading dimension of `batch_size`
         # beyond this point.
         # HINT: the sum of the lengths of all the arrays is `batch_size`.
+        obs = np.concatenate(obs)
+        actions = np.concatenate(actions)
+        rewards = np.concatenate(rewards)
+        terminals = np.concatenate(terminals)
+        q_values = np.concatenate(q_values)
 
         # step 2: calculate advantages from Q values
         assert q_values.ndim == 1
-        advantages: np.ndarray = None
+        advantages: np.ndarray = self._estimate_advantage(obs, rewards, q_values, terminals)
 
         assert advantages.ndim == 1
         # step 3: use all datapoints (s_t, a_t, adv_t) to update the PG actor/policy
         if not self.use_ppo:
             # TODO: normalize the advantages to have a mean of zero and a standard deviation of one within the batch
             if self.normalize_advantages:
-                pass
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             # TODO: update the PG actor/policy network once using the advantages
-            info: dict = None
+            info: dict = self.actor.update(obs, actions, advantages)
 
             if self.critic is not None:
                 # TODO: update the critic for `baseline_gradient_steps` times
-                critic_info: dict = None
+                for _ in range(self.baseline_gradient_steps):
+                    critic_info: dict = self.critic.update(obs, q_values)
 
                 info.update(critic_info)
         else:
@@ -124,15 +130,18 @@ class PGAgent(nn.Module):
 
                     # TODO: normalize `advantages_slice`` to have a mean of zero and a standard deviation of one within the batch
                     if self.normalize_advantages:
-                        pass
+                        advantages_slice = (advantages_slice - advantages_slice.mean()) / (advantages_slice.std() + 1e-8)
 
                     # TODO: update the PG actor/policy with PPO objective
                     # HINT: call self.actor.ppo_update
-                    info: dict = None
+                    info: dict = self.actor.ppo_update(
+                        obs_slice, actions_slice, advantages_slice, logp_slice, self.ppo_cliprange
+                    )
 
             assert self.critic is not None, "PPO requires a critic for calculating GAE."
             # TODO: update the critic for `baseline_gradient_steps` times
-            critic_info: dict = None
+            for _ in range(self.baseline_gradient_steps):
+                critic_info: dict = self.critic.update(obs, q_values)
 
             info.update(critic_info)
         return info
@@ -147,13 +156,12 @@ class PGAgent(nn.Module):
             # trajectory at each point.
             # In other words: Q(s_t, a_t) = sum_{t'=0}^T gamma^t' r_{t'}
             # TODO: use the helper function self._discounted_return to calculate the Q-values
-
-            q_values = None
+            q_values = [self._discounted_return(r) for r in rewards]
         else:
             # Case 2: in reward-to-go PG, we only use the rewards after timestep t to estimate the Q-value for (s_t, a_t).
             # In other words: Q(s_t, a_t) = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
             # TODO: use the helper function self._discounted_reward_to_go to calculate the Q-values
-            q_values = None
+            q_values = [self._discounted_reward_to_go(r) for r in rewards]
 
         return q_values
 
@@ -170,14 +178,14 @@ class PGAgent(nn.Module):
 
         if self.critic is None:
             # TODO: if no baseline, then what are the advantages?
-            advantages = None
+            advantages = q_values
         else:
             # TODO: run the critic and use it as a baseline
-            values = None
+            values = ptu.to_numpy(self.critic(ptu.from_numpy(obs)))
 
             if self.gae_lambda is None:
                 # TODO: if using a baseline, but not GAE, what are the advantages?
-                advantages = None
+                advantages = q_values - values
             else:
                 # TODO: implement GAE
                 batch_size = obs.shape[0]
@@ -194,7 +202,8 @@ class PGAgent(nn.Module):
                     # TODO: recursively compute advantage estimates starting from timestep T.
                     # HINT: use terminals to handle edge cases. terminals[i] is 1 if there isn't a next state in its
                     # trajectory, and 0 otherwise.
-                    pass
+                    delta = rewards[i] + self.gamma * (1 - terminals[i]) * values[i + 1] - values[i]
+                    advantages[i] = delta + self.gamma * self.gae_lambda * (1 - terminals[i]) * advantages[i + 1]
 
                 # remove dummy advantage
                 advantages = advantages[:-1]
@@ -224,7 +233,10 @@ class PGAgent(nn.Module):
         """
         assert rewards.ndim == 1
         # TODO: calculate discounted return using the above formula
-        ret = None
+        T = len(rewards)
+        gammas = np.array([self.gamma ** t for t in range(T)])
+        total = np.sum(gammas * rewards)
+        ret = np.full(T, total, dtype=np.float32)
 
         assert rewards.shape == ret.shape
         return ret
@@ -249,7 +261,12 @@ class PGAgent(nn.Module):
         """
         assert rewards.ndim == 1
         # TODO: calculate discounted reward to go using the above formula
-        ret = None
+        T = len(rewards)
+        ret = np.zeros(T, dtype=np.float32)
+        running = 0.0
+        for t in reversed(range(T)):
+            running = rewards[t] + self.gamma * running
+            ret[t] = running
 
         assert rewards.shape == ret.shape
         return ret
@@ -266,7 +283,14 @@ class PGAgent(nn.Module):
         assert obs.ndim == 2
         # TODO: calculate the log probabilities
         # HINT: self.actor outputs a distribution object, which has a method log_prob that takes in the actions
-        logp = None
+        with torch.no_grad():
+            obs_tensor = ptu.from_numpy(obs)
+            actions_tensor = ptu.from_numpy(actions)
+            dist = self.actor(obs_tensor)
+            logp = dist.log_prob(actions_tensor)
+            if not self.actor.discrete:
+                logp = logp.sum(axis=-1)
+            logp = ptu.to_numpy(logp)
 
         assert logp.ndim == 1 and logp.shape[0] == obs.shape[0]
         return logp
