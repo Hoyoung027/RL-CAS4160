@@ -269,3 +269,197 @@ L(ϕ) = (1/2) * Σ ‖V^π_ϕ(s^i) - y_i‖²
 Critic `V^π_ϕ(s)`를 학습해두면 advantage `A = Q(s,a) - V(s)`를 계산할 수 있고, 이것으로 policy를 업데이트하면 gradient의 분산이 크게 줄어든다. "Actor-critic" 이름의 유래가 바로 여기다: Actor(policy)는 Critic(value function)의 평가를 받아 학습한다.
 
 ---
+
+## 3. `cas4160/networks/policies.py` — 정책 (Actor)
+
+### 역할
+
+실제로 action을 선택하는 policy 신경망이다. 관측값 `s`를 받아 확률 분포를 출력하고, 그 분포에서 action을 샘플링한다. Policy gradient로 학습되며, PPO에서는 clipped objective로 업데이트된다.
+
+---
+
+### 구현 코드 (`MLPPolicy` + `MLPPolicyPG`)
+
+```python
+class MLPPolicy(nn.Module):
+
+    def __init__(self, ac_dim, ob_dim, discrete, n_layers, layer_size, learning_rate):
+        super().__init__()
+        if discrete:
+            self.logits_net = ptu.build_mlp(ob_dim, ac_dim, n_layers, layer_size).to(ptu.device)
+            parameters = self.logits_net.parameters()
+        else:
+            self.mean_net = ptu.build_mlp(ob_dim, ac_dim, n_layers, layer_size).to(ptu.device)
+            self.logstd = nn.Parameter(torch.zeros(ac_dim, dtype=torch.float32, device=ptu.device))
+            parameters = itertools.chain([self.logstd], self.mean_net.parameters())
+        self.optimizer = optim.Adam(parameters, learning_rate)
+        self.discrete = discrete
+
+    @torch.no_grad()
+    def get_action(self, obs: np.ndarray) -> np.ndarray:
+        """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
+        # TODO: implement get_action
+        obs_tensor = ptu.from_numpy(obs[None])  # (1, ob_dim)
+        dist = self(obs_tensor)
+        action = ptu.to_numpy(dist.sample()[0])
+        return action
+
+    def forward(self, obs: torch.FloatTensor) -> distributions.Distribution:
+        if self.discrete:
+            # TODO: define the forward pass for a policy with a discrete action space.
+            # HINT: use torch.distributions.Categorical to define the distribution.
+            logits = self.logits_net(obs)
+            dist = distributions.Categorical(logits=logits)
+        else:
+            # TODO: define the forward pass for a policy with a continuous action space.
+            # HINT: use torch.distributions.Normal to define the distribution.
+            mean = self.mean_net(obs)
+            std = torch.exp(self.logstd)
+            dist = distributions.Normal(mean, std)
+        return dist
+
+
+class MLPPolicyPG(MLPPolicy):
+
+    def update(self, obs, actions, advantages) -> dict:
+        obs = ptu.from_numpy(obs)
+        actions = ptu.from_numpy(actions)
+        advantages = ptu.from_numpy(advantages)
+
+        # TODO: implement the policy gradient actor update.
+        # HINT: don't forget to do `self.optimizer.step()`!
+        dist = self(obs)
+        log_prob = dist.log_prob(actions)
+        if not self.discrete:
+            # continuous: log_prob shape은 (batch, ac_dim) → 각 action dim의 log_prob 합산
+            log_prob = log_prob.sum(axis=-1)
+        loss = -(log_prob * advantages).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {"Actor Loss": ptu.to_numpy(loss)}
+
+    def ppo_update(self, obs, actions, advantages, old_logp, ppo_cliprange=0.2) -> dict:
+        obs = ptu.from_numpy(obs)
+        actions = ptu.from_numpy(actions)
+        advantages = ptu.from_numpy(advantages)
+        old_logp = ptu.from_numpy(old_logp)
+
+        # TODO: Implement the ppo update.
+        # HINT: calculate logp first, and then caculate ratio and clipped loss.
+        # HINT: ratio is the exponential of the difference between logp and old_logp.
+        # HINT: You can use torch.clamp to clip values.
+        dist = self(obs)
+        logp = dist.log_prob(actions)
+        if not self.discrete:
+            logp = logp.sum(axis=-1)
+
+        ratio = torch.exp(logp - old_logp)
+        clipped_ratio = torch.clamp(ratio, 1 - ppo_cliprange, 1 + ppo_cliprange)
+        loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {"PPO Loss": ptu.to_numpy(loss)}
+```
+
+---
+
+### 각 TODO 설명
+
+#### TODO 1: `get_action` — 단일 관측값으로 action 샘플링
+
+```python
+obs_tensor = ptu.from_numpy(obs[None])  # (1, ob_dim)
+dist = self(obs_tensor)
+action = ptu.to_numpy(dist.sample()[0])
+```
+
+`obs`는 shape `(ob_dim,)`인 1D numpy array이다. network는 batch 처리를 기대하므로 `obs[None]`으로 `(1, ob_dim)`으로 만들어 넣는다. `forward()`가 분포를 반환하면 `.sample()`로 action을 하나 뽑고, `[0]`으로 batch 차원을 제거한 뒤 numpy로 변환한다.
+
+`@torch.no_grad()` 데코레이터가 붙어있는 이유는 rollout 중 action을 선택할 때는 gradient를 추적할 필요가 없어서 메모리와 연산을 절약하기 위해서다.
+
+#### TODO 2: `forward` (discrete) — Categorical 분포
+
+```python
+logits = self.logits_net(obs)
+dist = distributions.Categorical(logits=logits)
+```
+
+Discrete action space (예: CartPole)에서는 각 action에 대한 unnormalized score(logits)를 출력하고, `Categorical` 분포로 감싼다. 내부적으로 softmax를 적용해 확률로 변환하므로 직접 softmax를 쓸 필요 없다.
+
+#### TODO 3: `forward` (continuous) — Normal 분포
+
+```python
+mean = self.mean_net(obs)
+std = torch.exp(self.logstd)
+dist = distributions.Normal(mean, std)
+```
+
+Continuous action space (예: HalfCheetah)에서는 각 action 차원의 평균을 network로 예측하고, 표준편차는 학습 가능한 파라미터 `logstd`로 관리한다. `logstd`를 직접 학습하는 이유는 std가 항상 양수여야 하는데, log 공간에서 학습하면 이 제약을 자동으로 만족하기 때문이다 (`exp`는 항상 양수).
+
+#### TODO 4: `update` — Policy gradient loss
+
+```python
+dist = self(obs)
+log_prob = dist.log_prob(actions)
+if not self.discrete:
+    log_prob = log_prob.sum(axis=-1)
+loss = -(log_prob * advantages).mean()
+```
+
+강의의 policy gradient 수식을 그대로 구현한다:
+
+```
+∇J(θ) = E[ ∇log π_θ(a|s) · A(s,a) ]
+```
+
+loss에 음수를 붙이는 이유는 PyTorch optimizer가 기본적으로 **최소화**를 하는데, 우리는 J(θ)를 **최대화**해야 하기 때문이다.
+
+continuous의 경우 `Normal.log_prob(actions)`은 shape `(batch, ac_dim)`이다. action의 각 차원이 독립적이라고 가정하면 joint log probability는 각 차원의 합이므로 `.sum(axis=-1)`로 `(batch,)` 형태로 합산한다.
+
+#### TODO 5: `ppo_update` — PPO clipped loss
+
+```python
+dist = self(obs)
+logp = dist.log_prob(actions)
+if not self.discrete:
+    logp = logp.sum(axis=-1)
+
+ratio = torch.exp(logp - old_logp)
+clipped_ratio = torch.clamp(ratio, 1 - ppo_cliprange, 1 + ppo_cliprange)
+loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
+```
+
+강의의 PPO objective:
+
+```
+J(θ) = E[ min( ratio·A, clip(ratio, 1-ε, 1+ε)·A ) ]
+```
+
+`ratio = π_θ(a|s) / π_old(a|s)` 를 log 공간에서 계산하면 수치 안정성이 높아진다:
+
+```
+ratio = exp(log π_θ - log π_old)
+```
+
+`torch.clamp`로 ratio를 `[1-ε, 1+ε]` 범위로 제한한 뒤, 원래 ratio와 clipped ratio 중 작은 값을 취한다. 이렇게 하면:
+- advantage > 0일 때: ratio가 너무 커지면(policy가 너무 많이 바뀌면) clamp로 제한 → 과도한 업데이트 방지
+- advantage < 0일 때: ratio가 너무 작아지면 clamp로 제한 → 마찬가지로 과도한 업데이트 방지
+
+---
+
+### Discrete vs Continuous 비교
+
+| | Discrete (e.g. CartPole) | Continuous (e.g. HalfCheetah) |
+|--|--|--|
+| 네트워크 출력 | logits `(batch, ac_dim)` | mean `(batch, ac_dim)` |
+| 분포 | `Categorical(logits)` | `Normal(mean, std)` |
+| log_prob shape | `(batch,)` | `(batch, ac_dim)` → `.sum(-1)` 필요 |
+| std | 없음 | 학습 가능한 `logstd` 파라미터 |
+
+---
