@@ -152,3 +152,120 @@ rollout_done이면 break, 아니면 반복
 ```
 
 ---
+
+## 2. `cas4160/networks/critics.py` — 가치함수 (Critic)
+
+### 역할
+
+Critic은 상태 `s`를 입력받아 그 상태의 가치 `V^π(s)`를 예측하는 신경망이다. 강의에서 말한 "baseline"이 바로 이 `V^π(s)`이다. Policy gradient의 분산을 줄이기 위해 advantage `A = Q(s,a) - V(s)`를 계산할 때 사용된다.
+
+---
+
+### 구현 코드 (`ValueCritic`)
+
+```python
+class ValueCritic(nn.Module):
+    """Value network, which takes an observation and outputs a value for that observation."""
+
+    def __init__(
+        self,
+        ob_dim: int,
+        n_layers: int,
+        layer_size: int,
+        learning_rate: float,
+    ):
+        super().__init__()
+
+        self.network = ptu.build_mlp(
+            input_size=ob_dim,
+            output_size=1,
+            n_layers=n_layers,
+            size=layer_size,
+        ).to(ptu.device)
+
+        self.optimizer = optim.Adam(
+            self.network.parameters(),
+            learning_rate,
+        )
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        # TODO: implement the forward pass of the critic network
+        return self.network(obs).squeeze(-1)
+
+    def update(self, obs: np.ndarray, q_values: np.ndarray) -> dict:
+        obs = ptu.from_numpy(obs)
+        q_values = ptu.from_numpy(q_values)
+
+        assert obs.ndim == 2
+        assert q_values.ndim == 1
+
+        # TODO: update the critic using the observations and q_values
+        predicted_values = self(obs)
+        loss = F.mse_loss(predicted_values, q_values)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {
+            "Baseline Loss": ptu.to_numpy(loss),
+        }
+```
+
+---
+
+### 각 TODO 설명
+
+#### TODO 1: `forward` — `self.network(obs).squeeze(-1)`
+
+```python
+return self.network(obs).squeeze(-1)
+```
+
+`ptu.build_mlp()`는 `output_size=1`로 만들어져 있어서 출력 shape이 `(batch, 1)`이다. 그런데 이후 advantage 계산에서 q_values는 `(batch,)` 형태의 1D 배열이다. 두 텐서의 shape이 맞지 않으면 loss 계산에서 broadcasting 오류가 생기므로 `.squeeze(-1)`로 마지막 차원을 제거해 `(batch,)`로 맞춰준다.
+
+```
+network 출력: (batch, 1)  →  squeeze(-1)  →  (batch,)
+q_values:     (batch,)
+```
+
+#### TODO 2: `update` — MSE loss + backprop
+
+```python
+predicted_values = self(obs)
+loss = F.mse_loss(predicted_values, q_values)
+
+self.optimizer.zero_grad()
+loss.backward()
+self.optimizer.step()
+```
+
+Critic을 학습시키는 방법은 지도학습의 회귀(regression)와 동일하다. 강의 슬라이드의 수식:
+
+```
+L(ϕ) = (1/2) * Σ ‖V^π_ϕ(s^i) - y_i‖²
+```
+
+여기서 target `y_i`가 바로 `q_values`이다. `q_values`는 pg_agent에서 계산된 실제 discounted reward-to-go이고, critic은 이것을 예측하도록 MSE loss로 학습된다.
+
+업데이트 3단계:
+1. `optimizer.zero_grad()` — 이전 gradient 초기화 (PyTorch는 gradient를 누적하므로 반드시 필요)
+2. `loss.backward()` — 역전파로 gradient 계산
+3. `optimizer.step()` — Adam optimizer로 파라미터 업데이트
+
+---
+
+### 왜 Critic이 필요한가?
+
+강의에서 policy gradient의 weight로 사용할 수 있는 것들을 비교했다:
+
+| weight | 특징 |
+|--------|------|
+| `r(τ)` (전체 보상) | 분산 매우 큼 |
+| `Σ r(s_{t'}, a_{t'})` (reward-to-go) | 분산 줄어듦 |
+| `Q^π(s,a)` (Q-value) | 분산 더 줄어듦 |
+| `A^π(s,a) = Q - V` (advantage) | **분산 가장 작음** ← Critic 필요 |
+
+Critic `V^π_ϕ(s)`를 학습해두면 advantage `A = Q(s,a) - V(s)`를 계산할 수 있고, 이것으로 policy를 업데이트하면 gradient의 분산이 크게 줄어든다. "Actor-critic" 이름의 유래가 바로 여기다: Actor(policy)는 Critic(value function)의 평가를 받아 학습한다.
+
+---
