@@ -28,17 +28,17 @@ def rollout_trajectory(
 
         assert ob.ndim == 1
         # TODO use the most recent ob and the policy to decide what to do
-        ac: np.ndarray = None
+        ac: np.ndarray = policy.get_action(ob)
 
         # check if output action matches the action space
         assert ac.shape == env.action_space.shape
 
         # TODO: use that action to take a step in the environment
-        next_ob, rew, terminated, truncated, _ = None, None, None, None, None
+        next_ob, rew, terminated, truncated, _ = env.step(ac)
 
         # TODO rollout can end due to (terminated or truncated), or due to max_length
         steps += 1
-        rollout_done: bool = None
+        rollout_done: bool = terminated or truncated or (steps >= max_length)
 
         # record result of taking that action
         obs.append(ob)
