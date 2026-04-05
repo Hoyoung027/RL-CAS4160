@@ -2,6 +2,106 @@
 
 ---
 
+## 강화학습 전체 학습 플로우
+
+### 1단계: Trajectory 수집
+
+**Trajectory** = 에이전트가 환경과 상호작용한 하나의 기록
+
+```
+trajectory 1: (s0,a0,r0) → (s1,a1,r1) → (s2,a2,r2) → 종료
+trajectory 2: (s0,a0,r0) → (s1,a1,r1) → 종료
+trajectory 3: (s0,a0,r0) → ... → 종료
+```
+
+현재 policy(actor)로 여러 trajectory를 실행해서 데이터를 모음.
+
+---
+
+### 2단계: Q값 계산
+
+각 trajectory의 보상으로 각 시점의 Q값 계산:
+
+```
+trajectory 1의 보상: [10, 20, 30]
+
+Q(s0) = 10 + γ*20 + γ²*30
+Q(s1) =      20   + γ*30
+Q(s2) =             30
+```
+
+---
+
+### 3단계: 배치(Batch) 구성
+
+모든 trajectory의 데이터를 **하나의 큰 배열로 합침**:
+
+```
+trajectory 1: 3개 스텝
+trajectory 2: 2개 스텝
+trajectory 3: 5개 스텝
+                 ↓ np.concatenate
+배치 크기 = 10개 (s, a, Q값 각각 10개짜리 배열)
+```
+
+---
+
+### 4단계: Advantage 계산
+
+배치 전체에 대해 한번에 계산:
+
+```
+V(s) = Critic이 추정한 값  ← 신경망에 obs 10개 한번에 넣음
+Advantage = Q값 - V(s)      ← 10개짜리 배열
+```
+
+---
+
+### 5단계: Actor 업데이트
+
+10개의 (s, a, advantage) 샘플을 **한번에** 넣어서 학습:
+
+```
+Loss = -mean(advantage * log π(a|s))
+```
+
+advantage가 양수인 행동 → 확률 높이기  
+advantage가 음수인 행동 → 확률 낮추기
+
+---
+
+### 6단계: Critic 업데이트
+
+10개의 (s, Q값) 샘플을 **한번에** 넣어서 학습:
+
+```
+Loss = mean((V(s) - Q값)²)
+```
+
+V(s) 예측이 Q값에 가까워지도록 신경망 가중치 업데이트.
+
+---
+
+### 전체 루프
+
+```
+┌─────────────────────────────────────┐
+│  현재 policy로 trajectory N개 수집   │
+│           ↓                         │
+│  Q값 계산 (Monte Carlo)              │
+│           ↓                         │
+│  배치로 합치기                        │
+│           ↓                         │
+│  Advantage 계산 (Q - V)             │
+│           ↓                         │
+│  Actor 업데이트 (더 좋은 행동 강화)   │
+│           ↓                         │
+│  Critic 업데이트 (V 추정 개선)        │
+└──────────────── 반복 ───────────────┘
+```
+
+---
+
 ## 1. `cas4160/infrastructure/utils.py` — 환경 롤아웃
 
 ### 역할
