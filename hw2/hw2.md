@@ -823,3 +823,120 @@ critic.update() × baseline_gradient_steps  →  value function 업데이트
 ```
 
 ---
+
+## 5. 실험 결과 및 Questions
+
+---
+
+### Section 4 — Policy Gradient (CartPole)
+
+#### 그래프
+
+![CartPole Small Batch](figure1_small_batch.png)
+![CartPole Large Batch](figure1_large_batch.png)
+
+---
+
+#### Q1. Which value estimator has better performance without advantage normalization: REINFORCE or reward-to-go?
+
+**Answer:**
+Reward-to-go (RTG) has better performance without advantage normalization. REINFORCE uses the full trajectory return, which includes rewards from past timesteps that are causally unrelated to the current action, resulting in higher variance gradient estimates. RTG exploits causality by summing only future rewards from the current timestep, reducing variance and leading to more stable and faster convergence, as observed in Figure 1.
+
+> **이유:** REINFORCE는 과거 보상까지 포함한 전체 trajectory return을 사용한다. 하지만 현재 action은 과거 보상에 영향을 줄 수 없으므로 과거 보상은 gradient 추정에 불필요한 noise만 추가한다. RTG는 현재 시점 이후의 보상만 합산하므로 이 noise를 제거해 gradient의 분산이 낮아진다.
+
+---
+
+#### Q2. Did advantage normalization help?
+
+**Answer:**
+Yes, advantage normalization significantly helped. Configurations with normalization (NA and RTG+NA) converge more stably to the maximum score of 200 compared to those without. Normalizing advantages to zero mean and unit variance stabilizes the scale of policy gradient updates, effectively acting as an adaptive learning rate and reducing sensitivity to reward magnitude.
+
+> **이유:** Advantage 값의 절대적인 크기가 크거나 작으면 gradient update의 step size가 불안정해진다. 정규화를 통해 mean=0, std=1로 맞추면 항상 일정한 scale로 업데이트가 이루어지며, reward의 절대적인 크기와 무관하게 안정적으로 학습된다.
+
+---
+
+#### Q3. Did the batch size make an impact?
+
+**Answer:**
+Yes, a larger batch size (4000) led to faster initial convergence and more stable learning curves across all configurations compared to the smaller batch size (1000). This is consistent with the fact that larger batches produce lower-variance gradient estimates, allowing more reliable policy updates per iteration.
+
+> **이유:** Policy gradient는 trajectory 샘플로 gradient를 추정하는데, 샘플이 적을수록 추정치의 분산이 크다. Batch size를 키우면 더 많은 trajectory를 평균내어 gradient를 계산하므로 분산이 줄고, 매 iteration마다 더 정확한 방향으로 업데이트할 수 있다.
+
+---
+
+#### Q4. Exact command line configurations
+
+```bash
+# Small batch (b=1000)
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 --exp_name cartpole
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 -rtg --exp_name cartpole_rtg
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 -na --exp_name cartpole_na
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 -rtg -na --exp_name cartpole_rtg_na
+
+# Large batch (b=4000)
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 --exp_name cartpole_lb
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 -rtg --exp_name cartpole_lb_rtg
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 -na --exp_name cartpole_lb_na
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 -rtg -na --exp_name cartpole_lb_rtg_na
+```
+
+---
+
+### Section 5 — Neural Network Baseline (HalfCheetah)
+
+#### 그래프
+
+![HalfCheetah Eval Return](figure2_eval_return.png)
+![HalfCheetah Baseline Loss](figure2_baseline_loss.png)
+
+---
+
+#### Q. How does decreased bgs/blr affect (a) the baseline learning curve and (b) the performance of the policy?
+
+**Answer:**
+Reducing the number of baseline gradient steps from 5 to 1 (bgs=1) noticeably affects both the baseline learning curve and policy performance. (a) The baseline loss for bgs=1 is higher and more unstable throughout training, particularly in the early stages, indicating that fewer gradient updates per iteration result in a less accurately fitted value function. (b) The degraded baseline quality leads to higher-variance advantage estimates, which impairs the policy gradient update and results in lower eval return compared to bgs=5.
+
+> **이유:** Critic(value function)은 policy가 업데이트될 때마다 새로운 policy에 맞게 다시 학습되어야 한다. gradient step이 적으면 critic이 현재 policy의 value를 충분히 학습하지 못한 채로 다음 iteration으로 넘어간다. 부정확한 V(s) 추정은 advantage = Q - V에서 noise를 증가시켜 policy gradient의 분산을 높인다.
+
+---
+
+### Section 6 — GAE (HumanoidStandup)
+
+#### 그래프
+
+![HumanoidStandup GAE](figure3_gae.png)
+
+---
+
+#### Q1. Describe in words how λ affected task performance.
+
+**Answer:**
+λ=0.95 achieves the highest peak return (~12000) and converges the fastest, while λ=1 reaches a similar but slightly lower final performance (~10500) with slower convergence. λ=0 performs significantly worse, plateauing around 5000. This demonstrates that an intermediate λ best balances the bias-variance tradeoff in advantage estimation.
+
+> **이유:** λ가 중간값(0.95)일 때 multi-step return과 value function 추정 사이의 균형이 잘 맞아 효율적으로 학습된다. λ=0은 1-step TD만 사용해 bias가 높고, λ=1은 Monte Carlo return을 사용해 분산이 높다.
+
+---
+
+#### Q2. What does λ=0 correspond to? What about λ=1?
+
+**Answer:**
+λ=0 corresponds to the 1-step TD advantage δ_t = r(s_t, a_t) + γV(s_{t+1}) − V(s_t), which relies entirely on the value function and has low variance but high bias due to approximation errors in V. λ=1 corresponds to the full Monte Carlo return, which has low bias but high variance. In HumanoidStandup-v5, λ=0 underperforms due to high bias limiting policy improvement, while λ=0.95 achieves the best result by incorporating both multi-step returns and the value function effectively.
+
+> **이유:** λ=0은 오직 V(s)에만 의존하므로 V(s)의 오차가 advantage 추정에 그대로 반영된다(high bias). λ=1은 실제 trajectory의 reward를 모두 사용하므로 bias는 낮지만, 긴 horizon에서 발생하는 reward의 확률적 변동으로 인해 분산이 커진다.
+
+---
+
+### Section 7 — PPO (Reacher)
+
+#### 그래프
+
+![Reacher PPO](figure4_ppo.png)
+
+---
+
+#### Q. If we do not use surrogate objective and do multiple batch updates, what would happen?
+
+**Answer:**
+Without the surrogate objective, performing multiple gradient updates on the same batch of data would cause the policy to deviate significantly from the policy used to collect the data. Since the advantage estimates are computed under the old policy, they become increasingly inaccurate as the policy changes, violating the on-policy assumption. This leads to biased gradient updates that can destabilize training and degrade policy performance. PPO's clipped surrogate objective prevents this by constraining the policy update size at each step, ensuring that the new policy remains close to the old policy and that the advantage estimates remain valid throughout the multiple update epochs.
+
+> **이유:** Policy gradient는 on-policy 알고리즘으로, 데이터를 수집한 policy와 업데이트하는 policy가 동일해야 한다. 같은 데이터로 여러 번 업데이트하면 policy가 변해 수집 당시의 advantage 값이 현재 policy에 맞지 않게 된다. PPO는 π_θ / π_old 비율을 1±ε 범위로 clip해서 policy가 한 번에 너무 많이 변하지 못하도록 제한한다. 이 덕분에 같은 데이터로 여러 번 안전하게 업데이트할 수 있어 sample efficiency가 높아진다.
