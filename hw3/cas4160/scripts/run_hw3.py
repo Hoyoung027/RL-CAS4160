@@ -89,11 +89,11 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         
         # TODO(student): Compute action
         # HINT: use agent.get_action() with epsilon
-        action = ...
+        action = agent.get_action(observation, epsilon)
 
         # TODO(student): Step the environment
         # HINT: use env.step()
-        next_observation, reward, terminated, truncated, info = ...
+        next_observation, reward, terminated, truncated, info = env.step(action)
 
         next_observation = np.asarray(next_observation)
 
@@ -108,6 +108,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
                 # We're using the regular replay buffer 
                 # Simply insert all obs (not observation[-1]) 
                 # replay_buffer.insert(...)
+                replay_buffer.insert(observation, action, reward, next_observation, terminated)
 
         # Handle episode termination
         if terminated or truncated:
@@ -122,14 +123,21 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         if step >= config["learning_starts"]:
             # TODO(student): Sample config["batch_size"] samples from the replay buffer
             # HINT: Use replay_buffer.sample()
-            batch = ... 
+            batch = replay_buffer.sample(config["batch_size"])
 
             # Convert to PyTorch tensors
             batch = ptu.from_numpy(batch)
 
             # TODO(student): Train the agent. `batch` is a dictionary of numpy arrays.
             # HINT: agent.update
-            update_info = ...
+            update_info = agent.update(
+                batch["observations"],
+                batch["actions"],
+                batch["rewards"],
+                batch["next_observations"],
+                batch["dones"],
+                step,
+            )
 
             # Logging code
             update_info["epsilon"] = epsilon

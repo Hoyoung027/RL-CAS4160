@@ -36,14 +36,14 @@ def sample_trajectory(
 
         # TODO(student): use the most recent ob to decide what to do
         # HINT: agent.get_action()
-        ac = ...
+        ac = agent.get_action(ob)
 
         # TODO(student): take that action and get reward and next obs from the environment
         # HINT: use env.step()
-        next_ob, rew, terminated, truncated, info = ...
+        next_ob, rew, terminated, truncated, info = env.step(ac)
 
         # TODO(student): rollout can end due to termination or truncation.
-        rollout_done = ... # HINT: this is either 0 or 1
+        rollout_done = 1 if (terminated or truncated) else 0 # HINT: this is either 0 or 1
 
         steps += 1
 
