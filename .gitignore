@@ -209,6 +209,7 @@ __marimo__/
 # RL-CAS4160 experiment outputs
 hw1/data/
 hw2/data/
+hw3/data/
 
 # mac
 .DS_Store
