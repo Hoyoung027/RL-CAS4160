@@ -184,12 +184,12 @@ class SoftActorCritic(nn.Module):
         # NOTE: we don't need gradients for target values!
         with torch.no_grad():
             # TODO(student): Sample from the actor
-            next_action_distribution: torch.distributions.Distribution = ...
-            next_action = ...
+            next_action_distribution: torch.distributions.Distribution = self.actor(next_obs)
+            next_action = next_action_distribution.sample()
 
             # TODO(student)
             # Compute the next Q-values using `self.target_critic` for the sampled actions
-            next_qs = ...
+            next_qs = self.target_critic(next_obs, next_action)
 
             # Handle Q-values from multiple different target critic networks (if necessary)
             # (for double-Q, clip-Q, etc.)
@@ -203,23 +203,23 @@ class SoftActorCritic(nn.Module):
             if self.use_entropy_bonus and self.backup_entropy:
                 # TODO(student): Add entropy bonus to the target values for SAC
                 # NOTE: use `self.entropy()`
-                next_action_entropy = ...
-                next_qs += 
+                next_action_entropy = self.entropy(next_action_distribution)
+                next_qs += self.temperature * next_action_entropy
 
             # TODO(student): Compute the target Q-value
             # HINT: implement Equation (1) in Homework 4
-            target_values: torch.Tensor = ...            
+            target_values: torch.Tensor = reward + self.discount * (1.0 - done.float()) * next_qs
             assert target_values.shape == (
                 self.num_critic_networks,
                 batch_size
             )
 
         # TODO(student): Predict Q-values using `self.critic`
-        q_values = ...
+        q_values = self.critic(obs, action)
         assert q_values.shape == (self.num_critic_networks, batch_size), q_values.shape
 
         # TODO(student): Compute loss using `self.critic_loss`
-        loss: torch.Tensor = ...
+        loss: torch.Tensor = self.critic_loss(q_values, target_values)
 
         self.critic_optimizer.zero_grad()
         loss.backward()
