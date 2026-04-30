@@ -351,9 +351,13 @@ class SoftActorCritic(nn.Module):
 
         # TODO(student): Update the critic for num_critic_upates steps, and add the output stats to critic_infos
         critic_infos = []
+        for _ in range(self.num_critic_updates):
+            critic_infos.append(
+                self.update_critic(observations, actions, rewards, next_observations, dones)
+            )
 
         # TODO(student): Update the actor
-        actor_info = {}
+        actor_info = self.update_actor(observations)
 
         # TODO(student): Perform either hard or soft target updates.
         # Relevant variables:
@@ -363,6 +367,11 @@ class SoftActorCritic(nn.Module):
         # For hard target updates, you should do it every self.target_update_period step
         # For soft target updates, you should do it every step
         # HINT: use `self.update_target_critic` or `self.soft_update_target_critic`
+        if self.target_update_period is not None:
+            if step % self.target_update_period == 0:
+                self.update_target_critic()
+        else:
+            self.soft_update_target_critic(self.soft_target_update_rate)
 
 
         # Average the critic info over all of the steps
