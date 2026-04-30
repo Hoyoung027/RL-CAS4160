@@ -250,12 +250,12 @@ class SoftActorCritic(nn.Module):
         batch_size = obs.shape[0]
 
         # TODO(student): Generate an action distribution
-        action_distribution: torch.distributions.Distribution = ...
+        action_distribution: torch.distributions.Distribution = self.actor(obs)
 
         with torch.no_grad():
             # TODO(student): Draw self.num_actor_samples samples from the action distribution for each batch element
             # NOTE: think about whether to use .rsample() or .sample() here
-            action = ...
+            action = action_distribution.sample((self.num_actor_samples,))
             assert action.shape == (
                 self.num_actor_samples,
                 batch_size,
@@ -265,7 +265,7 @@ class SoftActorCritic(nn.Module):
             # TODO(student): Compute Q-values for the current state-action pair
             # HINT: need to add one dimension with `self.num_actor_samples` at the beginning of `obs`
             # HINT: for this, you can use either `repeat` or `expand`
-            q_values = ...
+            q_values = self.critic(obs.unsqueeze(0).expand(self.num_actor_samples, -1, -1), action)
             assert q_values.shape == (
                 self.num_critic_networks,
                 self.num_actor_samples,
@@ -277,11 +277,11 @@ class SoftActorCritic(nn.Module):
 
         # Do REINFORCE (without baseline)
         # TODO(student): Calculate log-probs
-        log_probs = ...
+        log_probs = action_distribution.log_prob(action)
         assert log_probs.shape == q_values.shape
 
         # TODO(student): Compute policy gradient using log-probs and Q-values
-        loss = ...
+        loss = -(log_probs * q_values).mean()
 
         return loss, torch.mean(self.entropy(action_distribution))
 
