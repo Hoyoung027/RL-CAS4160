@@ -240,8 +240,8 @@ class SoftActorCritic(nn.Module):
         # HINT: use one action sample for estimating the entropy.
         # HINT: use action_distribution.log_prob to get the log probability.
         # NOTE: think about whether to use .rsample() or .sample() here
-        action = ...
-        entropy = ...
+        action = action_distribution.rsample()
+        entropy = -action_distribution.log_prob(action)
 
         assert entropy.shape == action.shape[:-1]
         return entropy
