@@ -2,6 +2,7 @@
 # HW2 전체 실험 실행 스크립트
 #
 # 사용법:
+#   nohup bash run_experiments.sh > data/logs/all.log 2>&1 &
 #   bash run_experiments.sh          # 전체 실험 실행
 #   bash run_experiments.sh 1        # Experiment 1 (CartPole)만 실행
 #   bash run_experiments.sh 2        # Experiment 2 (HalfCheetah)만 실행
