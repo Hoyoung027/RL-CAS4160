@@ -38,3 +38,9 @@ source ~/.bashrc
 | cas4160 환경 | `/usr/local/bin/anaconda3/envs/cas4160` |
 | Python | `/usr/local/bin/anaconda3/envs/cas4160/bin/python` |
 | pip | `/usr/local/bin/anaconda3/envs/cas4160/bin/pip` |
+
+### 3. tensorboard 실행 방법
+
+```bash
+tensorboard --logdir data --host 0.0.0.0
+```
