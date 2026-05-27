@@ -92,8 +92,8 @@ class ModelBasedAgent(nn.Module):
         obs_acs_normalized = (obs_acs - self.obs_acs_mean) / self.obs_acs_std
 
         obs_delta_normalized = (obs_delta - self.obs_delta_mean) / self.obs_delta_std
-        obs_delta_normalized_hat = ...
-        loss = ... 
+        obs_delta_normalized_hat = self.dynamics_models[i](obs_acs_normalized)
+        loss = self.loss_fn(obs_delta_normalized_hat, obs_delta_normalized)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -142,7 +142,7 @@ class ModelBasedAgent(nn.Module):
         # HINT: use self.dynamics_models[i] to get the delta prediction for next obs.
         obs_acs = torch.concat([obs, acs], axis=-1)
         obs_acs_normalized = (obs_acs - self.obs_acs_mean) / self.obs_acs_std 
-        obs_delta_normalized = ...
+        obs_delta_normalized = self.dynamics_models[i](obs_acs_normalized)
 
         obs_delta = obs_delta_normalized * self.obs_delta_std + self.obs_delta_mean
         pred_next_obs = obs + obs_delta
@@ -182,7 +182,10 @@ class ModelBasedAgent(nn.Module):
 
             # TODO(student): predict the next_obs for each rollout
             # HINT: use self.get_dynamics_predictions
-            #next_obs = ...
+            next_obs = np.stack([
+                self.get_dynamics_predictions(i, obs[i], acs)
+                for i in range(self.ensemble_size)
+            ])
             assert next_obs.shape == (
                 self.ensemble_size,
                 self.mpc_num_action_sequences,
@@ -226,10 +229,21 @@ class ModelBasedAgent(nn.Module):
             for i in range(self.cem_num_iters):
                 # TODO(student): implement the CEM algorithm
                 # HINT 1: Use self.evaluate_action_sequences for evaluating the action sequence.
-                # HINT 2: For getting the top-k indices, you can use np.argpartition function. 
+                # HINT 2: For getting the top-k indices, you can use np.argpartition function.
                 # HINT 3: Generate action sequence with the mean and standard deviation of the elite sequences.
                 # Note that we use diagnoal gaussian distribution, not with full covariance.
-                action_sequences = ...
+                rewards = self.evaluate_action_sequences(obs, action_sequences)
+                elite_indices = np.argpartition(rewards, -self.cem_num_elites)[-self.cem_num_elites:]
+                elite_sequences = action_sequences[elite_indices]  # (cem_num_elites, horizon, ac_dim)
+
+                elite_mean = elite_sequences.mean(axis=0)   # (horizon, ac_dim)
+                elite_std = elite_sequences.std(axis=0)     # (horizon, ac_dim)
+
+                action_sequences = np.random.normal(
+                    loc=elite_mean,
+                    scale=elite_std + 1e-6,
+                    size=(self.mpc_num_action_sequences, self.mpc_horizon, self.ac_dim),
+                )
                 
                 action_sequences = np.clip(action_sequences, self.env.action_space.low, self.env.action_space.high)
 
