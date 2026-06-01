@@ -198,7 +198,13 @@ def run_training_loop(args):
                 #       replay buffer is initialized above as `replay_buffer`
                 #       please check `cas4160/infastructure/replay_buffer.py` for more details
                 traj1, traj2, prefs = annotated_traj
-
+                replay_buffer.insert(
+                    observation_1=traj1["observation"],
+                    observation_2=traj2["observation"],
+                    action_1=traj1["action"],
+                    action_2=traj2["action"],
+                    prefs=np.array([prefs], dtype=np.float32),
+                )
 
             traj_list.clear()  # Clear the traj_list after saving videos
             annotated_traj_list.clear()  # Clear the annotated trajectories
@@ -213,8 +219,12 @@ def run_training_loop(args):
                 # sample `batch_size_reward_predictor` and train reward_predictor
                 # repeat `num_update_reward_predictor` times.
 
-                batch = None
-                loss, accuracy = None
+                batch = replay_buffer.sample(batch_size_reward_predictor)
+                loss, accuracy = agent.reward_predictor.train_step(
+                    batch["observations_1"], batch["actions_1"],
+                    batch["observations_2"], batch["actions_2"],
+                    batch["prefs"],
+                )
 
                 reward_loss.append(loss)
                 accuracies.append(accuracy)
@@ -227,7 +237,9 @@ def run_training_loop(args):
         # TODO: Replace reward value from reward predictor
         # Hint: make sure you set `training=False`
         for traj in trajs:
-            traj["reward"] = None
+            traj["reward"] = agent.reward_predictor.predict_rewards(
+                traj["observation"], traj["action"]
+            )
 
         trajs_dict = {k: [traj[k] for traj in trajs] for k in trajs[0]}
 
@@ -247,7 +259,9 @@ def run_training_loop(args):
 
             # TODO: Update evaluation reward for evaluation logging
             for traj in eval_trajs:
-                traj["reward"] = None
+                traj["reward"] = agent.reward_predictor.predict_rewards(
+                    traj["observation"], traj["action"]
+                )
 
             logs = utils.compute_metrics(trajs, eval_trajs)
             logs.update(train_info)

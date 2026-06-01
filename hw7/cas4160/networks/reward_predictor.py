@@ -54,7 +54,8 @@ class RewardPredictor(nn.Module):
         # TODO: predict reward using `reward_net`
         # HINT: you should concatenate observation and action
 
-        rewards_flat = None
+        inp = torch.cat([obs_flat, acts_flat], dim=-1)
+        rewards_flat = self.reward_net(inp).squeeze(-1)
 
         rewards = rewards_flat.reshape(batch_size, n_frames)
 
@@ -70,12 +71,12 @@ class RewardPredictor(nn.Module):
         #       2. Sum the rewards
         #       3. Use Softmax to get probabiltiy
 
-        reward_1 = None
-        reward_2 = None
+        reward_1 = self.predict_rewards(obs1, acts1, training=True)
+        reward_2 = self.predict_rewards(obs2, acts2, training=True)
 
-        reward_sum_1 = None
-        reward_sum_2 = None
-        pred = None
+        reward_sum_1 = reward_1.sum(dim=1, keepdim=True)
+        reward_sum_2 = reward_2.sum(dim=1, keepdim=True)
+        pred = F.softmax(torch.cat([reward_sum_1, reward_sum_2], dim=1), dim=1)
 
         return pred
 
@@ -86,8 +87,8 @@ class RewardPredictor(nn.Module):
         prefs = ptu.from_numpy(prefs)
         prefs = torch.concat([1 - prefs, prefs], dim=1)
 
-        preds = None
-        loss = None
+        preds = self.predict_preferences(obs1, acts1, obs2, acts2)
+        loss = -torch.sum(prefs * torch.log(preds + 1e-8), dim=1).mean()
 
         accuracy = (preds.argmax(dim=1) == prefs.argmax(dim=1)).float().mean()
 
@@ -96,6 +97,9 @@ class RewardPredictor(nn.Module):
     def train_step(self, obs1, acts1, obs2, acts2, prefs):
         # TODO: Perform the training step
 
-        loss, accuracy = None
+        self.optimizer.zero_grad()
+        loss, accuracy = self.compute_loss_and_accuracy(obs1, acts1, obs2, acts2, prefs)
+        loss.backward()
+        self.optimizer.step()
 
         return loss.item(), accuracy.item()

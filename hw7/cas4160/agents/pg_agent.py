@@ -49,7 +49,7 @@ class PGAgent(nn.Module):
         # TODO: initialize reward predictor
         # what should be the input size?
         self.reward_predictor = RewardPredictor(
-            input_size=None,
+            input_size=ob_dim + ac_dim,
             n_layers=2,
             layer_size=64,
             learning_rate=1e-4
